@@ -1,0 +1,30 @@
+{
+  "name": "postgres-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "plugin.name": "pgoutput",
+    "database.hostname": "postgres",
+    "database.port": "5432",
+    "database.user": "postgres",
+    "database.password": "postgres",
+    "database.dbname": "transactions_db",
+    "database.server.name": "postgres",
+    "topic.prefix": "postgres",
+    "table.include.list": "public.transactions",
+    "publication.name": "flink_publication",
+    "slot.name": "flink_slot",
+    "max.batch.size": "2048",
+    "decimal.handling.mode": "string",
+    "tombstones.on.delete": "false",
+    "snapshot.mode": "initial",
+    "signal.enabled.channels": "source",
+    "signal.data.collection": "public.debezium_signal",
+    "signal.poll.interval.ms": "5000",
+    "schema.history.internal.kafka.topic": "postgres-transactions-history",
+    "schema.history.internal.kafka.bootstrap.servers": "kafka:9092",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter.schemas.enable": "false"
+  }
+}

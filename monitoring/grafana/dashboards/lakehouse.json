@@ -1,0 +1,281 @@
+{
+  "title": "Lakehouse Overview",
+  "uid": "lakehouse-overview",
+  "version": 1,
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Flink JobManager",
+      "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "up{job=\"flink-jobmanager\"}", "legendFormat": "JM" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "green", "value": 1 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Flink TaskManager",
+      "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "up{job=\"flink-taskmanager\"}", "legendFormat": "TM" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "green", "value": 1 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Kafka broker",
+      "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "up{job=\"kafka\"}", "legendFormat": "Kafka" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "green", "value": 1 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Polaris",
+      "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "up{job=\"polaris\"}", "legendFormat": "Polaris" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "green", "value": 1 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Trino",
+      "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "up{job=\"trino\"}", "legendFormat": "Trino" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "green", "value": 1 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Connect REST",
+      "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "probe_success{instance=\"http://debezium:8083/connectors\"}", "legendFormat": "Connect" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "green", "value": 1 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Records/sec (in/out)",
+      "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (job)(rate(flink_taskmanager_job_task_operator_numRecordsInPerSecond[1m]))", "legendFormat": "in" },
+        { "refId": "B", "expr": "sum by (job)(rate(flink_taskmanager_job_task_operator_numRecordsOutPerSecond[1m]))", "legendFormat": "out" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "recps" }, "overrides": [] }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Backpressure (ms/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        { "refId": "A", "expr": "flink_taskmanager_job_task_backPressuredTimeMsPerSecond", "legendFormat": "{{job}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Checkpoints completed",
+      "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 12 },
+      "targets": [
+        { "refId": "A", "expr": "flink_jobmanager_job_numberOfCompletedCheckpoints", "legendFormat": "completed" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "green", "value": 1 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Checkpoints failed",
+      "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 12 },
+      "targets": [
+        { "refId": "A", "expr": "flink_jobmanager_job_numberOfFailedCheckpoints", "legendFormat": "failed" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "red", "value": 1 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Checkpoint duration (ms)",
+      "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        { "refId": "A", "expr": "flink_jobmanager_job_lastCheckpointDuration", "legendFormat": "last checkpoint" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Job restarts (total)",
+      "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        { "refId": "A", "expr": "flink_jobmanager_job_numRestarts", "legendFormat": "restarts" }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 13,
+      "type": "stat",
+      "title": "Kafka under-replicated",
+      "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 24 },
+      "targets": [
+        { "refId": "A", "expr": "kafka_server_replicamanager_underreplicatedpartitions", "legendFormat": "URP" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "red", "value": 1 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Consumer lag (flink-lakehouse)",
+      "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "targets": [
+        { "refId": "A", "expr": "sum(kafka_consumergroup_lag{consumergroup=\"flink-lakehouse\"})", "legendFormat": "lag" }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Polaris REST latency (p99)",
+      "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket[5m])) by (le,uri))", "legendFormat": "{{uri}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Trino queries",
+      "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "targets": [
+        { "refId": "A", "expr": "trino_execution_name_QueryManager_RunningQueries", "legendFormat": "running" },
+        { "refId": "B", "expr": "trino_execution_name_QueryManager_QueuedQueries", "legendFormat": "queued" }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Trino failed queries (total)",
+      "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+      "targets": [
+        { "refId": "A", "expr": "trino_execution_name_QueryManager_FailedQueries", "legendFormat": "failed" }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    }
+  ]
+}

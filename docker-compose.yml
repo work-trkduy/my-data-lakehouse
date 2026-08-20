@@ -1,0 +1,437 @@
+name: lakehouse
+
+networks:
+  lakehouse-net:
+    driver: bridge
+
+services:
+  # ============ 1. SOURCE DATABASE ============
+  postgres:
+    build:
+      context: ./postgres
+    image: lakehouse/postgres:16
+    container_name: lakehouse-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_wal_senders=10"
+      - "-c"
+      - "max_replication_slots=10"
+    ports:
+      - "5432:5432"
+    volumes:
+      # State + init SQL bound to project dir (no named volumes).
+      - ./postgres/data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks:
+      - lakehouse-net
+
+  # ============ 2. KAFKA (KRaft single node) ============
+  kafka:
+    image: apache/kafka:4.3.1
+    container_name: lakehouse-kafka
+    environment:
+      # KRaft combined broker+controller on node 1
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      # Listeners: clients on 9092, internal controller on 9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # Persist broker data to the bind-mounted dir. Without this the
+      # apache/kafka image defaults log.dirs to /tmp/kafka-logs (ephemeral), so
+      # every container recreate silently wipes ALL topics (caught by the
+      # negative consumer-lag alert — the group offset survives, the topic does
+      # not). KAFKA_LOG_DIRS -> log.dirs via the image's KAFKA_* -> config map.
+      KAFKA_LOG_DIRS: /mnt/kafka-logs
+      # Prometheus JMX exporter javaagent (binds 0.0.0.0:7071). KAFKA_OPTS is the
+      # apache/kafka image's JVM-args hook (NOT KAFKA_JMX_OPTS).
+      KAFKA_OPTS: "-javaagent:/opt/kafka/jmx_exporter/jmx_prometheus_javaagent-1.6.0.jar=7071:/opt/kafka/jmx_exporter/jmx-kafka.yml"
+    ports:
+      - "9092:9092"
+      - "7071:7071"
+    volumes:
+      - ./kafka/data:/mnt/kafka-logs
+      - ./monitoring/kafka:/opt/kafka/jmx_exporter:ro
+    healthcheck:
+      # NOTE: must NOT use kafka-broker-api-versions.sh — that JVM script inherits
+      # KAFKA_OPTS, so the Prometheus javaagent would try to bind :7071 a second
+      # time (already held by the broker) and fail the check. nc checks the broker
+      # listener directly without spawning another JVM.
+      test: ["CMD-SHELL", "nc -z localhost 9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+    networks:
+      - lakehouse-net
+
+  # ============ 3. DEBEZIUM (CDC capture) ============
+  debezium:
+    build:
+      context: ./debezium
+    image: lakehouse/debezium:3.0.0
+    container_name: lakehouse-debezium
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP}
+      GROUP_ID: 1
+      CONFIG_STORAGE_TOPIC: connect-configs
+      OFFSET_STORAGE_TOPIC: connect-offsets
+      STATUS_STORAGE_TOPIC: connect-status
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+    ports:
+      - "8083:8083"
+    networks:
+      - lakehouse-net
+
+  # Sidecar: registers the Postgres CDC connector once Connect's REST API is up.
+  debezium-register:
+    image: curlimages/curl:latest
+    container_name: lakehouse-debezium-register
+    depends_on:
+      debezium:
+        condition: service_started
+    entrypoint: ["/bin/sh", "/scripts/register-debezium.sh"]
+    volumes:
+      - ./debezium:/scripts:ro
+    networks:
+      - lakehouse-net
+
+  # ============ 4. MINIO (S3-compatible storage) ============
+  minio:
+    build:
+      context: ./minio
+    image: lakehouse/minio:latest
+    container_name: lakehouse-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - ./minio/data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks:
+      - lakehouse-net
+
+  # Create the warehouse bucket once.
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    container_name: lakehouse-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/init.sh"]
+    volumes:
+      - ./minio/init.sh:/init.sh:ro
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+    networks:
+      - lakehouse-net
+
+  # ============ 5a. POLARIS METADATA DB (Postgres persistence backend) ============
+  # Polaris 1.7.0 ships the relational-jdbc metastore backend + Postgres JDBC
+  # driver. Catalog metadata lives here so it survives container recreation.
+  polaris-db:
+    image: postgres:16
+    container_name: lakehouse-polaris-db
+    environment:
+      POSTGRES_USER: ${POLARIS_DB_USER}
+      POSTGRES_PASSWORD: ${POLARIS_DB_PASSWORD}
+      POSTGRES_DB: ${POLARIS_DB_NAME}
+    volumes:
+      # State bound to project dir (no named volumes).
+      - ./polaris-db/data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POLARIS_DB_USER} -d ${POLARIS_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks:
+      - lakehouse-net
+
+  # ============ 5b. POLARIS BOOTSTRAP (relational-jdbc schema) ============
+  # One-shot: creates the Postgres schema/metadata tables Polaris needs BEFORE
+  # the server boots. The Postgres schema does NOT auto-create. Uses the SAME
+  # Quarkus datasource env vars as the `polaris` server (same DB). Idempotent.
+  polaris-bootstrap:
+    image: apache/polaris-admin-tool:1.7.0
+    container_name: lakehouse-polaris-bootstrap
+    depends_on:
+      polaris-db:
+        condition: service_healthy
+    command:
+      - "bootstrap"
+      - "--realm=${POLARIS_REALM}"
+      - "--credential=${POLARIS_REALM},${POLARIS_ROOT_USER},${POLARIS_ROOT_PASSWORD}"
+    environment:
+      POLARIS_PERSISTENCE_TYPE: relational-jdbc
+      POLARIS_PERSISTENCE_RELATIONAL_JDBC_DATABASE_TYPE: postgresql
+      QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://polaris-db:5432/${POLARIS_DB_NAME}
+      QUARKUS_DATASOURCE_USERNAME: ${POLARIS_DB_USER}
+      QUARKUS_DATASOURCE_PASSWORD: ${POLARIS_DB_PASSWORD}
+    networks:
+      - lakehouse-net
+
+  # ============ 5c. POLARIS (Iceberg REST catalog) ============
+  polaris:
+    build:
+      context: ./polaris
+    image: lakehouse/polaris:1.7.0
+    container_name: lakehouse-polaris
+    depends_on:
+      # Schema must exist before the server starts (see polaris-bootstrap).
+      polaris-bootstrap:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+    environment:
+      POLARIS_BOOTSTRAP_CREDENTIALS: "${POLARIS_REALM},${POLARIS_ROOT_USER},${POLARIS_ROOT_PASSWORD}"
+      "polaris.realm-context.realms": "${POLARIS_REALM}"
+      POLARIS_SERVER_PORT: "8181"
+      # Allow DROP TABLE ... PURGE. Polaris ships with DROP_WITH_PURGE_ENABLED=false,
+      # so dropping a table from Flink/Trino fails with ForbiddenException "Unable to
+      # purge entity" unless this feature flag is turned on server-side.
+      'polaris.features."DROP_WITH_PURGE_ENABLED"': "true"
+      # Persist catalog metadata in Postgres (relational-jdbc backend) instead of
+      # the in-memory store, so the catalog survives container recreation.
+      POLARIS_PERSISTENCE_TYPE: relational-jdbc
+      POLARIS_PERSISTENCE_RELATIONAL_JDBC_DATABASE_TYPE: postgresql
+      QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://polaris-db:5432/${POLARIS_DB_NAME}
+      QUARKUS_DATASOURCE_USERNAME: ${POLARIS_DB_USER}
+      QUARKUS_DATASOURCE_PASSWORD: ${POLARIS_DB_PASSWORD}
+      # S3 storage credentials vended by Polaris for writing Iceberg metadata
+      AWS_REGION: ${MINIO_REGION}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "--fail",
+          "http://localhost:8182/q/health",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+    ports:
+      - "8181:8181"
+      - "8182:8182"
+    networks:
+      - lakehouse-net
+
+  # Bootstrap: create the warehouse catalog inside Polaris pointing at MinIO.
+  polaris-setup:
+    image: apache/polaris:1.7.0
+    container_name: lakehouse-polaris-setup
+    depends_on:
+      polaris:
+        condition: service_started
+    entrypoint: ["/bin/bash", "/scripts/setup.sh"]
+    environment:
+      POLARIS_REALM: ${POLARIS_REALM}
+      POLARIS_ROOT_USER: ${POLARIS_ROOT_USER}
+      POLARIS_ROOT_PASSWORD: ${POLARIS_ROOT_PASSWORD}
+      POLARIS_CATALOG: ${POLARIS_CATALOG}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_EXTERNAL_ENDPOINT: ${MINIO_EXTERNAL_ENDPOINT}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_REGION: ${MINIO_REGION}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+    volumes:
+      - ./polaris:/scripts:ro
+    networks:
+      - lakehouse-net
+
+  # ============ 6. FLINK (stream processing) ============
+  flink-jobmanager:
+    build:
+      context: ./flink
+    image: lakehouse/flink:2.1
+    container_name: lakehouse-flink-jm
+    depends_on:
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      polaris:
+        condition: service_started
+    environment:
+      FLINK_JOBMANAGER_HOSTNAME: flink-jobmanager
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        # Checkpoints/savepoints go to the shared bind-mount so the append-only
+        # Iceberg sink can resume (it is NOT idempotent -- cold re-runs would
+        # duplicate rows). Do NOT use s3:// for state: the flink image has no
+        # flink-s3-fs plugin baked in.
+        state.backend.type: hashmap
+        state.checkpoints.dir: file:///opt/flink/checkpoints
+        state.savepoints.dir: file:///opt/flink/savepoints
+        execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+        # Prometheus metrics reporter (pull-based). Jar is bundled as a plugin in
+        # /opt/flink/plugins/metrics-prometheus — config-only, no jar copy needed.
+        metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+        metrics.reporter.prom.port: 9249
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./flink/sql:/opt/flink-sql:ro
+      - ./flink/checkpoints:/opt/flink/checkpoints
+      - ./flink/savepoints:/opt/flink/savepoints
+    command: jobmanager
+    networks:
+      - lakehouse-net
+
+  flink-taskmanager:
+    build:
+      context: ./flink
+    image: lakehouse/flink:2.1
+    container_name: lakehouse-flink-tm
+    depends_on:
+      flink-jobmanager:
+        condition: service_started
+    environment:
+      FLINK_JOBMANAGER_HOSTNAME: flink-jobmanager
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 4
+        parallelism.default: 2
+        # Same checkpoint/savepoint dirs as the jobmanager (shared bind-mount).
+        # Keep on file:// -- no flink-s3-fs plugin in this image.
+        state.backend.type: hashmap
+        state.checkpoints.dir: file:///opt/flink/checkpoints
+        state.savepoints.dir: file:///opt/flink/savepoints
+        execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+        # Prometheus metrics reporter (pull-based). Same as jobmanager.
+        metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+        metrics.reporter.prom.port: 9249
+    volumes:
+      - ./flink/checkpoints:/opt/flink/checkpoints
+      - ./flink/savepoints:/opt/flink/savepoints
+    command: taskmanager
+    networks:
+      - lakehouse-net
+
+  # ============ 7. TRINO (query engine for DBeaver) ============
+  trino:
+    build:
+      context: ./trino
+    image: lakehouse/trino:483
+    container_name: lakehouse-trino
+    depends_on:
+      minio:
+        condition: service_healthy
+      polaris:
+        condition: service_started
+    environment:
+      CLIENT_ID: ${POLARIS_ROOT_USER}
+      CLIENT_SECRET: ${POLARIS_ROOT_PASSWORD}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      CATALOG_MANAGEMENT: static
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./trino/catalog:/etc/trino/catalog:ro
+    networks:
+      - lakehouse-net
+
+  # ============ 8. MONITORING (Prometheus + Grafana + exporters) ============
+  prometheus:
+    image: prom/prometheus:v3.13.2
+    container_name: lakehouse-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/data:/prometheus
+    networks:
+      - lakehouse-net
+
+  grafana:
+    image: grafana/grafana:13.1.3
+    container_name: lakehouse-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./monitoring/grafana/data:/var/lib/grafana
+    networks:
+      - lakehouse-net
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.9.0
+    container_name: lakehouse-kafka-exporter
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command:
+      - --kafka.server=kafka:9092
+      - --group.filter=flink-lakehouse
+      - --offset.show-all
+      - --web.listen-address=:9308
+    ports:
+      - "9308:9308"
+    networks:
+      - lakehouse-net
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.28.0
+    container_name: lakehouse-blackbox
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/blackbox_exporter/blackbox.yml
+    ports:
+      - "9115:9115"
+    volumes:
+      - ./monitoring/blackbox/blackbox.yml:/etc/blackbox_exporter/blackbox.yml:ro
+    networks:
+      - lakehouse-net

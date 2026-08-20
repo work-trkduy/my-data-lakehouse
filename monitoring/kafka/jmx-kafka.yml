@@ -1,0 +1,49 @@
+# Prometheus JMX exporter rules for a single-node Apache Kafka 4.3.1 in KRaft
+# combined mode (broker+controller in one JVM). Based on the official
+# examples/kafka-kraft-3_0_0.yml; the classic MBeans are unchanged in 4.x.
+#
+# The javaagent (1.6.0) also auto-exposes jvm_* / process_cpu_* metrics, so no
+# CPU/GC rules are needed here.
+
+lowercaseOutputName: true
+
+rules:
+  # --- broker health / capacity (kafka.server:type=ReplicaManager) ---
+  - pattern: "kafka.server<type=ReplicaManager, name=UnderReplicatedPartitions><>Value"
+    name: kafka_server_replicamanager_underreplicatedpartitions
+    type: GAUGE
+  - pattern: "kafka.server<type=ReplicaManager, name=OfflineReplicaCount><>Value"
+    name: kafka_server_replicamanager_offlinereplicacount
+    type: GAUGE
+  - pattern: "kafka.server<type=ReplicaManager, name=PartitionCount><>Value"
+    name: kafka_server_replicamanager_partitioncount
+    type: GAUGE
+
+  # --- KRaft controller (same JVM in combined mode) ---
+  - pattern: "kafka.controller<type=KafkaController, name=ActiveControllerCount><>Value"
+    name: kafka_controller_kafkacontroller_activecontrollercount
+    type: GAUGE
+  - pattern: "kafka.controller<type=KafkaController, name=OfflinePartitionsCount><>Value"
+    name: kafka_controller_kafkacontroller_offlinepartitionscount
+    type: GAUGE
+
+  # --- request rate (per request type + api version, KIP-272) ---
+  - pattern: "kafka.network<type=RequestMetrics, name=RequestsPerSec, request=(.+), version=(.+)><>Count"
+    name: kafka_network_requestmetrics_requests_total
+    type: COUNTER
+    labels:
+      request: "$1"
+      version: "$2"
+
+  # --- network bytes in/out (Meter Count = cumulative counter) ---
+  - pattern: "kafka.server<type=BrokerTopicMetrics, name=BytesInPerSec><>Count"
+    name: kafka_server_brokertopicmetrics_bytesin_total
+    type: COUNTER
+  - pattern: "kafka.server<type=BrokerTopicMetrics, name=BytesOutPerSec><>Count"
+    name: kafka_server_brokertopicmetrics_bytesout_total
+    type: COUNTER
+
+  # --- broker CPU saturation proxy ---
+  - pattern: "kafka.server<type=KafkaRequestHandlerPool, name=RequestHandlerAvgIdlePercent><>Value"
+    name: kafka_server_kafkarequesthandlerpool_requesthandleravgidle_percent
+    type: GAUGE

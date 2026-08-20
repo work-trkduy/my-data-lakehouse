@@ -1,0 +1,72 @@
+# Prometheus scrape config for the CDC lakehouse stack. All targets are on the
+# same bridge network (lakehouse-net), so scrape by SERVICE NAME, not localhost.
+# (The only localhost target is Prometheus's own self-scrape.)
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: flink-jobmanager
+    static_configs:
+      - targets: ["flink-jobmanager:9249"]
+
+  - job_name: flink-taskmanager
+    static_configs:
+      - targets: ["flink-taskmanager:9249"]
+
+  - job_name: kafka
+    static_configs:
+      - targets: ["kafka:7071"]
+
+  - job_name: kafka-consumer-lag
+    static_configs:
+      - targets: ["kafka-exporter:9308"]
+
+  - job_name: polaris
+    metrics_path: /q/metrics            # NOT /metrics (removed in Polaris 1.3.0)
+    static_configs:
+      - targets: ["polaris:8182"]       # management port, NOT 8181
+
+  - job_name: trino
+    metrics_path: /metrics              # native OpenMetrics (v407+), port 8080
+    static_configs:
+      - targets: ["trino:8080"]
+    # Trino 483 guards /metrics behind a *user identity* signal even though the
+    # server runs `http-server.authentication.type=insecure` (no validation).
+    # It returns 401 unless we send either `Authorization: Basic` or an
+    # `X-Trino-User` header. Prometheus can't send arbitrary headers, but it CAN
+    # send basic_auth — Trino accepts any username here and ignores the password.
+    basic_auth:
+      username: prometheus
+      password: ""
+    # /metrics is ~874 KB of high-cardinality series; drop the fine-grained
+    # per-window rate series and the airlift http client internals.
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: '.*_(OneMinute|FiveMinute|FifteenMinute)_.*'
+        action: drop
+      - source_labels: [__name__]
+        regex: '.*io_airlift_http_client.*'
+        action: drop
+
+  # Up/down signal for REST-only endpoints (Kafka Connect, Trino) via blackbox.
+  - job_name: blackbox
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://debezium:8083/connectors
+          - http://trino:8080/v1/info
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115

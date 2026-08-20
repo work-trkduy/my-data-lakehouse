@@ -1,0 +1,35 @@
+# --- Runtime data / DB state (never commit) ---
+
+# Kafka broker data
+kafka/data/
+
+# MinIO object storage + Iceberg warehouse
+minio/data/
+
+# Source database data (Postgres)
+postgres/data/
+
+# Polaris metadata backend (Postgres) data
+polaris-db/data/
+
+# Flink checkpoint / savepoint state
+flink/checkpoints/
+flink/savepoints/
+
+# Monitoring runtime data
+monitoring/grafana/data/
+monitoring/prometheus/data/
+
+# --- Downloaded binary deps / jars ---
+flink/flink-jars/
+monitoring/kafka/*.jar
+
+# --- Local / machine-specific ---
+# Claude Code local settings (permissions are machine-specific)
+.claude/settings.local.json
+
+# --- OS / editor junk ---
+.DS_Store
+*.log
+*.tmp
+*.swp
